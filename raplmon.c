@@ -39,10 +39,11 @@ sensor_sort(const bfdev_list_head_t *n1, const bfdev_list_head_t *n2, void *p)
     return strcmp(s1->path, s2->path);
 }
 
-static void
+static size_t
 path_read(const char *path, char *buff, size_t size)
 {
-    int fd, retval;
+    ssize_t length;
+    int fd;
 
     fd = open(path, O_RDONLY);
     if (fd < 0) {
@@ -50,21 +51,20 @@ path_read(const char *path, char *buff, size_t size)
         exit(errno);
     }
 
-    retval = read(fd, buff, size);
-    if (retval < 0) {
+    length = read(fd, buff, size);
+    if (length <= 0) {
         perror("failed to read file");
         exit(errno);
     }
 
     close(fd);
+    return length;
 }
 
 static void
 discovery_sensors(void)
 {
-    char name[PATH_MAX + 1], energy[PATH_MAX + 1];
     sensor_t *sensor;
-    struct dirent *dirent;
     DIR *pcap;
 
     pcap = opendir(RAPL_DIRECTORY);
@@ -74,6 +74,10 @@ discovery_sensors(void)
     }
 
     for (;;) {
+        char name[PATH_MAX + 1], energy[PATH_MAX + 1];
+        struct dirent *dirent;
+        size_t length;
+
         dirent = readdir(pcap);
         if (!dirent)
             break;
@@ -95,14 +99,14 @@ discovery_sensors(void)
             exit(ENOMEM);
         }
 
-        path_read(name, sensor->name, RAPL_NLEN);
-        sensor->name[strlen(sensor->name) - 1] = '\0';
-
+        length = path_read(name, sensor->name, RAPL_NLEN);
+        sensor->name[length - 1] = '\0';
         strncpy(sensor->path, dirent->d_name, PATH_MAX);
         strncpy(sensor->energy, energy, PATH_MAX);
         bfdev_list_add(&sensors, &sensor->list);
     }
 
+    closedir(pcap);
     bfdev_list_sort(&sensors, sensor_sort, NULL);
     bfdev_list_for_each_entry(sensor, &sensors, list) {
         bfdev_max_adj(path_align, strlen(sensor->path));
@@ -126,23 +130,9 @@ show_sensors(void)
 
     bfdev_list_for_each_entry(sensor, &sensors, list) {
         double power;
-        ssize_t retval;
-        int fd;
+        size_t length;
 
-        fd = open(sensor->energy, O_RDONLY);
-        if (fd < 0) {
-            perror("failed to open energy file");
-            exit(errno);
-        }
-
-        retval = read(fd, buffer, RAPL_NLEN);
-        if (retval <= 0) {
-            perror("failed to read energy file");
-            exit(errno);
-        }
-
-        close(fd);
-        buffer[retval - 1] = '\0';
+        path_read(sensor->energy, buffer, RAPL_NLEN);
         uj = strtoll(buffer, NULL, 10);
         power = (double)(uj - sensor->last) / 1000000;
         sensor->last = uj;
