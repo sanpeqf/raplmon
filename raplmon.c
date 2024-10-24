@@ -3,6 +3,8 @@
 #include <stdbool.h>
 #include <string.h>
 #include <errno.h>
+#include <float.h>
+#include <signal.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <dirent.h>
@@ -14,6 +16,8 @@
 
 typedef struct {
     bfdev_list_head_t list;
+    double max, min;
+    double total;
     uint64_t last;
     bool already;
 
@@ -27,6 +31,12 @@ BFDEV_LIST_HEAD(sensors);
 
 static unsigned int
 path_align, name_align;
+
+static volatile bool
+signal_exit;
+
+static unsigned int
+sample_count = (unsigned int)-1;
 
 static long
 sensor_sort(const bfdev_list_head_t *n1, const bfdev_list_head_t *n2, void *p)
@@ -103,6 +113,8 @@ discovery_sensors(void)
         sensor->name[length - 1] = '\0';
         strncpy(sensor->path, dirent->d_name, PATH_MAX);
         strncpy(sensor->energy, energy, PATH_MAX);
+        sensor->max = DBL_MIN;
+        sensor->min = DBL_MAX;
         bfdev_list_add(&sensors, &sensor->list);
     }
 
@@ -130,7 +142,6 @@ show_sensors(void)
 
     bfdev_list_for_each_entry(sensor, &sensors, list) {
         double power;
-        size_t length;
 
         path_read(sensor->energy, buffer, RAPL_NLEN);
         uj = strtoll(buffer, NULL, 10);
@@ -142,6 +153,10 @@ show_sensors(void)
             continue;
         }
 
+        bfdev_max_adj(sensor->max, power);
+        bfdev_min_adj(sensor->min, power);
+        sensor->total += power;
+
         bfdev_log_info(
             "%-*s => %-*s = %.4lfw\n",
             path_align, sensor->path,
@@ -151,19 +166,52 @@ show_sensors(void)
     }
 }
 
+static void
+signal_handler(int sig)
+{
+    bfdev_log_notice("waitting for exit...\n");
+    signal_exit = true;
+}
+
 int
 main(int argc, const char *const argv[])
 {
+    if (signal(SIGINT, signal_handler)) {
+        perror("failed to register signal");
+        return -EFAULT;
+    }
+
     discovery_sensors();
     if (bfdev_list_check_empty(&sensors)) {
         bfdev_log_alert("no available sensor found\n");
-        return ENODEV;
+        return -ENODEV;
     }
 
     for (;;) {
         show_sensors();
+        sample_count++;
         bfdev_log_info("--------------------------------\n");
         sleep(1);
+
+        /* skip initial sample */
+        if (sample_count < 1)
+            continue;
+
+        if (signal_exit) {
+            sensor_t *sensor;
+
+            bfdev_list_for_each_entry(sensor, &sensors, list) {
+                bfdev_log_info(
+                    "%-*s => %-*s = Max:%.4lfw, Min:%.4lfw, Avg:%.4lfw\n",
+                    path_align, sensor->path,
+                    name_align, sensor->name,
+                    sensor->max, sensor->min,
+                    sensor->total / sample_count
+                );
+            }
+
+            break;
+        }
     }
 
     return 0;
