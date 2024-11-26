@@ -211,6 +211,7 @@ main(int argc, const char *const argv[])
 
     for (;;) {
         unsigned int max_align, min_align, avg_align;
+        unsigned int max_price, min_price;
         sensor_t *sensor;
 
         sample_sensors();
@@ -226,21 +227,28 @@ main(int argc, const char *const argv[])
         max_align = 0;
         min_align = 0;
         avg_align = 0;
+        max_price = 0;
+        min_price = 0;
 
         bfdev_list_for_each_entry(sensor, &sensors, list) {
             bfdev_max_adj(max_align, snprintf(NULL, 0, "%.4lf", sensor->max));
             bfdev_max_adj(min_align, snprintf(NULL, 0, "%.4lf", sensor->min));
             bfdev_max_adj(avg_align, snprintf(NULL, 0, "%.4lf", sensor->total / sample_count));
+            bfdev_max_adj(max_price, snprintf(NULL, 0, "%.4lf", sensor->total / sample_count * FEE_1_2_WH_YEAR));
+            bfdev_max_adj(min_price, snprintf(NULL, 0, "%.4lf", sensor->total / sample_count * FEE_0_5_WH_YEAR));
         }
 
         bfdev_list_for_each_entry(sensor, &sensors, list) {
             bfdev_log_info(
-                "%-*s => %-*s = Max: %*.4lfw, Min: %*.4lfw, Avg: %*.4lfw\n",
+                "%-*s => %-*s = Max: %*.4lfw, Min: %*.4lfw, Avg: %*.4lfw "
+                "Price: (0.5 ~ 1.2 kWH/CNY) [%*.4lf, %*.4lf] CNY/Year\n",
                 path_align, sensor->path,
                 name_align, sensor->name,
                 max_align, sensor->max,
                 min_align, sensor->min,
-                avg_align, sensor->total / sample_count
+                avg_align, sensor->total / sample_count,
+                min_price, sensor->total / sample_count * FEE_0_5_WH_YEAR,
+                max_price, sensor->total / sample_count * FEE_1_2_WH_YEAR
             );
         }
 
