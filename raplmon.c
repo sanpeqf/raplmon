@@ -14,10 +14,14 @@
 #define RAPL_PREFIX "intel-rapl:"
 #define RAPL_NLEN 256
 
+#define HOURS_PER_YEAR (365 * 24)
+#define FEE_0_5_WH_YEAR (HOURS_PER_YEAR * 0.0005)
+#define FEE_1_2_WH_YEAR (HOURS_PER_YEAR * 0.0012)
+
 typedef struct {
     bfdev_list_head_t list;
     double max, min;
-    double total;
+    double total, power;
     uint64_t last;
     bool already;
 
@@ -36,7 +40,7 @@ static volatile bool
 signal_exit;
 
 static unsigned int
-sample_count = (unsigned int)-1;
+sample_count;
 
 static long
 sensor_sort(const bfdev_list_head_t *n1, const bfdev_list_head_t *n2, void *p)
@@ -134,7 +138,7 @@ discovery_sensors(void)
 }
 
 static void
-show_sensors(void)
+sample_sensors(void)
 {
     char buffer[RAPL_NLEN];
     sensor_t *sensor;
@@ -155,13 +159,27 @@ show_sensors(void)
 
         bfdev_max_adj(sensor->max, power);
         bfdev_min_adj(sensor->min, power);
-        sensor->total += power;
+        sensor->power = power;
+    }
+}
 
+static void
+show_sensors(void)
+{
+    unsigned int align;
+    sensor_t *sensor;
+
+    align = 0;
+    bfdev_list_for_each_entry(sensor, &sensors, list)
+        bfdev_max_adj(align, snprintf(NULL, 0, "%.4lf", sensor->power));
+
+    bfdev_list_for_each_entry(sensor, &sensors, list) {
+        sensor->total += sensor->power;
         bfdev_log_info(
-            "%-*s => %-*s = %.4lfw\n",
+            "%-*s => %-*s = Power: %*.4lfw\n",
             path_align, sensor->path,
             name_align, sensor->name,
-            power
+            align, sensor->power
         );
     }
 }
@@ -187,31 +205,46 @@ main(int argc, const char *const argv[])
         return -ENODEV;
     }
 
+    /* initial sample */
+    sample_sensors();
+    sleep(1);
+
     for (;;) {
+        unsigned int max_align, min_align, avg_align;
+        sensor_t *sensor;
+
+        sample_sensors();
         show_sensors();
         sample_count++;
+
         bfdev_log_info("--------------------------------\n");
         sleep(1);
 
-        /* skip initial sample */
-        if (sample_count < 1)
+        if (!signal_exit)
             continue;
 
-        if (signal_exit) {
-            sensor_t *sensor;
+        max_align = 0;
+        min_align = 0;
+        avg_align = 0;
 
-            bfdev_list_for_each_entry(sensor, &sensors, list) {
-                bfdev_log_info(
-                    "%-*s => %-*s = Max:%.4lfw, Min:%.4lfw, Avg:%.4lfw\n",
-                    path_align, sensor->path,
-                    name_align, sensor->name,
-                    sensor->max, sensor->min,
-                    sensor->total / sample_count
-                );
-            }
-
-            break;
+        bfdev_list_for_each_entry(sensor, &sensors, list) {
+            bfdev_max_adj(max_align, snprintf(NULL, 0, "%.4lf", sensor->max));
+            bfdev_max_adj(min_align, snprintf(NULL, 0, "%.4lf", sensor->min));
+            bfdev_max_adj(avg_align, snprintf(NULL, 0, "%.4lf", sensor->total / sample_count));
         }
+
+        bfdev_list_for_each_entry(sensor, &sensors, list) {
+            bfdev_log_info(
+                "%-*s => %-*s = Max: %*.4lfw, Min: %*.4lfw, Avg: %*.4lfw\n",
+                path_align, sensor->path,
+                name_align, sensor->name,
+                max_align, sensor->max,
+                min_align, sensor->min,
+                avg_align, sensor->total / sample_count
+            );
+        }
+
+        break;
     }
 
     return 0;
